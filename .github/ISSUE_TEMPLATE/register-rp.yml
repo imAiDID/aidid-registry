@@ -1,0 +1,78 @@
+name: Register a relying party
+description: Ask to add your site to the AIDID integration registry (non-technical path).
+title: "[register] <your origin>"
+labels:
+  - registration
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is the **non-technical path** to the AIDID registry. A maintainer (or a
+        future bot) turns an accepted issue into a pull request against `rp-registry.json`.
+
+        Being listed only proves that you control the origin below. It is **not** a
+        security or reputation endorsement, and the list is not a recommendation.
+
+        If you can edit a file and open a pull request, prefer the self-service path:
+        edit `rp-registry.json` directly (see the pull request template).
+  - type: input
+    id: origin
+    attributes:
+      label: Origin
+      description: "Canonical https origin only: scheme + host (+ port). No path, no trailing slash, no query or credentials."
+      placeholder: https://app.example
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Display name
+      description: The name shown in the directory.
+      placeholder: Example App
+    validations:
+      required: true
+  - type: input
+    id: homepage
+    attributes:
+      label: Homepage
+      description: A public https origin for display only — not a trust signal.
+      placeholder: https://app.example
+    validations:
+      required: true
+  - type: input
+    id: challenge
+    attributes:
+      label: Challenge
+      description: "Publish exactly this string at https://<your origin>/.well-known/aidid-rp.txt. Format: aidid-rp-verify- followed by 16–64 lowercase hex characters. Generate one at https://aidid.im/registry/ if you need to."
+      placeholder: aidid-rp-verify-0123456789abcdef0123456789abcdef
+    validations:
+      required: true
+  - type: checkboxes
+    id: capabilities
+    attributes:
+      label: Capabilities (optional, display only)
+      description: Declared integrations. Never a security guarantee.
+      options:
+        - label: login
+        - label: vc-verify
+        - label: delegation
+  - type: input
+    id: did
+    attributes:
+      label: did:msg identifier (optional)
+      description: "Your own did:msg:… Recommended now; REQUIRED from on-chain phase 1. Leave blank if you do not have one yet."
+      placeholder: did:msg:...
+  - type: input
+    id: contact
+    attributes:
+      label: Contact (optional)
+      description: How we can reach you if the entry needs an update or a takedown.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I control this origin and can publish the challenge file at /.well-known/aidid-rp.txt.
+          required: true
+        - label: I understand that a listing is not an endorsement by AIDID.
+          required: true

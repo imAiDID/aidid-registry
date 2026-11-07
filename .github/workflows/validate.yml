@@ -1,0 +1,150 @@
+# Validate the AIDID integration registry and auto-merge challenge-verified changes.
+#
+# Policy (decided by the AIDID project, 2026-10-11): a pull request that ONLY edits
+# `rp-registry.json` is merged automatically once DNS/domain ownership is proven —
+# that is, once `https://<origin>/.well-known/aidid-rp.txt` serves exactly the
+# registered `challenge`. A listing proves control of the origin; it is NOT a
+# security or reputation endorsement.
+#
+# Self-service (2026-10-12): ANY third party — including someone who is not a
+# collaborator and can only open a pull request from a fork — gets the same
+# automatic merge. This is why the event is `pull_request_target` (the workflow runs
+# in the context of THIS repository, so its token can write) instead of
+# `pull_request` (a fork pull request is handed a read-only token).
+#
+# SECURITY MODEL — read this before changing anything below.
+# `pull_request_target` is only safe because we NEVER execute code from the pull
+# request and NEVER check out its branch:
+#   1. `actions/checkout` checks out the BASE repository only
+#      (`github.event.pull_request.base.sha`); no step ever references the head ref.
+#   2. The validator (`scripts/validate-registry.mjs`) and Node are taken from the
+#      base checkout. There is no `npm install` / `npm ci` and no execution of any
+#      file that came from the pull request.
+#   3. The submitted `rp-registry.json` is fetched through the Contents API and
+#      overwritten into the workspace as INERT DATA. Nothing parses it as code.
+#   4. Event-derived values (the pull request number) are validated against a strict
+#      pattern before being interpolated into a command, and are passed via `env`,
+#      not spliced into the shell.
+#   5. `permissions` is the minimum needed: `contents: write` (merge) and
+#      `pull-requests: write`.
+# If someone later adds a checkout of the head ref, an `npm install`, or runs a
+# script from the pull request, this becomes a critical vulnerability. Do not.
+#
+# Fail-closed rules enforced below:
+#   - any challenge mismatch / bad structure  -> the validate step fails, no merge;
+#   - any verified entry that could not be checked live (network) -> [SKIP] -> no merge;
+#   - a pull request that touches any file other than `rp-registry.json` -> no merge;
+#   - any failure while fetching the submitted JSON -> no merge.
+#
+# Known limits (do not pretend otherwise):
+#   - If this repository enables branch protection requiring human approvals,
+#     required status checks beyond this workflow, or a merge queue, the automatic
+#     merge is blocked until those are satisfied.
+name: validate-registry
+
+on:
+  # Runs in the base repository's context. Covers BOTH same-repository and fork pull
+  # requests; a fork pull request is exactly the case this workflow exists for.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - rp-registry.json
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: validate-registry-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-merge:
+    name: Validate rp-registry.json
+    # A draft cannot be merged; wait for `ready_for_review` rather than failing red.
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      # SECURITY STEP 1: check out the BASE repository only. Never the head ref.
+      - name: Check out the base repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # SECURITY STEP 3: fetch the submitted file through the Contents API (at the
+      # pull request's own ref, resolved inside THIS repository) and drop it in as
+      # data. The fork's branch is never checked out.
+      - name: Fetch the submitted registry as inert data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$PR" in
+            '' | *[!0-9]*) echo "::error::Unexpected pull request number."; exit 1 ;;
+          esac
+          gh api "repos/$REPO/contents/rp-registry.json?ref=refs/pull/$PR/head" \
+            --jq '.content' | base64 -d > "$RUNNER_TEMP/submitted-rp-registry.json"
+          cp "$RUNNER_TEMP/submitted-rp-registry.json" rp-registry.json
+          echo "Fetched $(wc -c < rp-registry.json) bytes of submitted registry data."
+
+      # Structure + a live fetch of every verified entry's .well-known file.
+      # A [SKIP] means the challenge was NOT proven, so we refuse to merge below.
+      # The validator itself always comes from the base checkout.
+      - name: Validate structure and live challenges
+        run: |
+          log="$RUNNER_TEMP/validate-registry.log"
+          node scripts/validate-registry.mjs > "$log" 2>&1 || { cat "$log"; exit 1; }
+          cat "$log"
+          if grep -qF '[SKIP]' "$log"; then
+            echo "::error::A verified entry could not be checked live — refusing to auto-merge (fail-closed)."
+            exit 1
+          fi
+
+      # The auto-merge policy is deliberately strict: ONLY rp-registry.json.
+      - name: Require that only rp-registry.json changed
+        id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          files="$(gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path')"
+          echo "Changed files:"
+          printf '%s\n' "$files"
+          unexpected="$(printf '%s\n' "$files" | grep -vxF 'rp-registry.json' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::This pull request changes files other than rp-registry.json — refusing to auto-merge."
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          echo "only_registry=true" >> "$GITHUB_OUTPUT"
+
+      # Merge every qualifying pull request — including the ones that come from a
+      # fork, which is the whole point of using pull_request_target above.
+      - name: Merge
+        if: steps.scope.outputs.only_registry == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_REPO" in
+            '' | *[!A-Za-z0-9._/-]*) echo "::error::Unexpected head repository."; exit 1 ;;
+          esac
+          if [ "$HEAD_REPO" = "$REPO" ]; then
+            gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
+          else
+            # Merging works, but this token cannot delete a branch inside someone
+            # else's fork. The fork owner (or GitHub's own setting) cleans it up.
+            gh pr merge "$PR" --repo "$REPO" --squash
+            echo "::notice::Merged a fork pull request ($HEAD_REPO); the head branch stays in the fork."
+          fi
