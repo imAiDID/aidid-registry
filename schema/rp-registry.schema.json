@@ -64,7 +64,22 @@
         },
         "status": { "type": "string", "enum": ["verified", "pending"] },
         "registeredAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "official": { "type": "boolean", "description": "Maintained by the AIDID project itself." }
+        "official": { "type": "boolean", "description": "Maintained by the AIDID project itself." },
+        "didPublicKey": {
+          "type": "string",
+          "pattern": "^z?[A-Za-z0-9+/]+={0,2}$",
+          "description": "Optional build-time evidence: the RP's Dilithium-5 public key, standard base64 over 2592 bytes (an optional multibase `z` prefix is tolerated). Lets an entry be re-verified without the chain or a DID resolver. Never rendered."
+        },
+        "didPublicKeyFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "Optional: sha256(publicKey)[0..16) as lowercase hex. When present it must match `didPublicKey`."
+        },
+        "challengeSignature": {
+          "type": "string",
+          "pattern": "^(dilithium5_)?[A-Za-z0-9+/]+={0,2}$",
+          "description": "Optional Dilithium-5 signature (standard base64 over 4595 bytes, optional `dilithium5_` prefix) over the domain-separated, origin-bound message `aidid-rp-challenge-v1\\n<origin>\\n<challenge>`. When present, `didPublicKey` is REQUIRED and the signature MUST verify, otherwise the entry is rejected. Entries without it are legacy declarations and still pass."
+        }
       }
     }
   },
@@ -97,12 +112,13 @@
     "status": "implemented",
     "source": [
       "frontend/lib/rpRegistry.ts#RpRegistrySnapshot",
+      "frontend/lib/rpChallengeSignature.ts#rpChallengeMessage",
       "frontend/scripts/verify-rp-registry.mjs"
     ],
     "enumBindings": [
       { "pointer": "/$defs/entry/properties/capabilities/items/enum", "source": "RP_CAPABILITIES" },
       { "pointer": "/$defs/entry/properties/tier/enum", "source": "RP_TIERS" }
     ],
-    "honestLimit": "Phase 0 is a repository snapshot. The on-chain RP registry (phase 1) is not deployed; `scripts/verify-rp-registry.mjs` checks each origin's /.well-known challenge in CI."
+    "honestLimit": "Phase 0 is a repository snapshot. The on-chain RP registry (phase 1) is not deployed; `scripts/verify-rp-registry.mjs` checks each origin's /.well-known challenge in CI (and, for entries that carry `challengeSignature`, verifies the Dilithium-5 did proof over `aidid-rp-challenge-v1\\n<origin>\\n<challenge>`; a signature is not a reputation signal). The site itself additionally reads a first-party Cloudflare cache of the public repository at runtime (workers/registry-refresh, refreshed on demand rather than on a fixed schedule) and falls back to the snapshot generated with the deployment whenever that read fails, so /registry may be fresher than this file."
   }
 }

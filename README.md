@@ -59,12 +59,38 @@ live, registration moves on-chain and costs **0.01 MSG per registration**.
    `capabilities` and `homepage` are display-only. Only `status: "verified"` entries
    are challenged and published.
 
+   **Optional: bind the entry to your DID (recommended).** Add your Dilithium-5 public
+   key and a signature over the domain-separated, origin-bound message
+
+   ```
+   aidid-rp-challenge-v1\n<origin>\n<challenge>        (UTF-8, one real LF per \n)
+   ```
+
+   ```json
+   {
+     "didPublicKey": "<base64, 2592 bytes>",
+     "didPublicKeyFingerprint": "<sha256(publicKey)[0..16) as lowercase hex>",
+     "challengeSignature": "<base64, 4595 bytes>"
+   }
+   ```
+
+   This proves the entry was signed by your `did:msg` key and cannot be replayed to
+   another origin. It is optional: entries without it are accepted as before, but any
+   *declared* signature must verify — a mismatch, a missing public key or a wrong
+   fingerprint is a hard failure. When the validator has no Dilithium-5 verifier
+   available (this repository has no dependencies), a signed entry is reported as
+   `[SKIP]`, which stops the automatic merge: a maintainer merges it after the AIDID
+   build re-verifies the same bytes. Scheme details:
+   <https://aidid.im/registry/> (and `docs/20261108_AIDID_Registry_DID挑战签名方案.md`
+   in the AIDID repository).
+
 ### What happens to your pull request
 
 The [`validate-registry`](.github/workflows/validate.yml) workflow:
 
 1. checks the document structure (plain-`https` origin, challenge shape, unique
-   origins, known fields);
+   origins, known fields) and, for entries that carry a DID proof, the base64 shapes,
+   byte lengths, fingerprint and the origin-bound message binding;
 2. fetches `https://<origin>/.well-known/aidid-rp.txt` for every `verified` entry and
    requires it to equal the registered `challenge`;
 3. **merges automatically** (squash) — but only when the pull request changes **exactly

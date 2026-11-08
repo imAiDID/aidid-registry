@@ -15,7 +15,21 @@
  *   2. origin uniqueness (the origin is the primary key);
  *   3. for every `status: "verified"` entry, that
  *      `https://<origin>/.well-known/aidid-rp.txt` serves EXACTLY the registered
- *      challenge (after trimming surrounding whitespace).
+ *      challenge (after trimming surrounding whitespace);
+ *   4. **DID proof** — when an entry declares `challengeSignature` it must also carry
+ *      its `didPublicKey` (standard base64, 2592 bytes) and its Dilithium-5 signature
+ *      (4595 bytes) must verify the canonical, origin-bound message
+ *      `aidid-rp-challenge-v1\n<origin>\n<challenge>`. Entries that declare nothing
+ *      are phase-0 style declarations and still pass (backward compatible); anything
+ *      *declared* but unusable is a hard failure.
+ *
+ * Signature verification needs a Dilithium-5 verifier, and this repository
+ * deliberately has **no dependencies** (the workflow that calls it must never run an
+ * `npm install`, let alone code from a pull request). If `@msg-chain/sdk/wallet` is not
+ * importable, a declared signature is reported as **SKIP** — never PASS — which stops
+ * the automatic merge (the workflow greps for `[SKIP]`), so a maintainer merges after
+ * the AIDID build re-verifies the same bytes. Everything else (structure, base64
+ * lengths, fingerprint, message binding) is still checked here.
  *
  * A **mismatch** (wrong value / non-2xx HTTP) is a hard failure (exit 1). A
  * **network failure** is reported as SKIP and does **not** set the exit code, so a
@@ -32,6 +46,7 @@
  * Exit codes: 0 = pass, 1 = failure.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,8 +73,16 @@ const ENTRY_KEYS = new Set([
   'status',
   'registeredAt',
   'official',
+  'didPublicKey',
+  'didPublicKeyFingerprint',
+  'challengeSignature',
 ]);
 const REQUEST_TIMEOUT_MS = 10_000;
+/* DID-proof constants — must match `frontend/lib/rpChallengeSignature.ts`. */
+const CHALLENGE_MESSAGE_DOMAIN = 'aidid-rp-challenge-v1';
+const DILITHIUM5_PUBLIC_KEY_BYTES = 2592;
+const DILITHIUM5_SIGNATURE_BYTES = 4595;
+const FINGERPRINT_PATTERN = /^[0-9a-f]{16}$/;
 
 const offline = process.argv.includes('--offline');
 
@@ -97,6 +120,45 @@ const normalizeOrigin = (value) => {
 };
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Strict base64 (standard or urlsafe, padding optional). */
+const decodeBase64 = (value) => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  if (normalized === '' || normalized.length % 4 === 1) return null;
+  if (!/^[A-Za-z0-9+/]+$/.test(normalized)) return null;
+  return Buffer.from(normalized, 'base64');
+};
+
+/**
+ * Decodes a Dilithium-5 public key. A multibase `z` prefix is stripped only when the
+ * value as given is not already a full-length key (`z` is a legal base64 character).
+ */
+const decodePublicKey = (value) => {
+  const direct = decodeBase64(value);
+  if (direct !== null && direct.length === DILITHIUM5_PUBLIC_KEY_BYTES) return direct;
+  if (value.startsWith('z')) {
+    const stripped = decodeBase64(value.slice(1));
+    if (stripped !== null && stripped.length === DILITHIUM5_PUBLIC_KEY_BYTES) return stripped;
+    if (stripped !== null) return stripped;
+  }
+  return direct;
+};
+
+const fingerprintOf = (bytes) => createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+
+let cachedVerifier;
+/** Dilithium-5 verifier, or `null` when this checkout has none (reported as SKIP). */
+const loadVerifier = async () => {
+  if (cachedVerifier !== undefined) return cachedVerifier;
+  try {
+    const sdk = await import('@msg-chain/sdk/wallet');
+    cachedVerifier = typeof sdk.verifySignature === 'function' ? sdk.verifySignature : null;
+  } catch {
+    cachedVerifier = null;
+  }
+  return cachedVerifier;
+};
 
 const unknownKeys = (value, allowed) => Object.keys(value).filter((key) => !allowed.has(key));
 
@@ -166,6 +228,7 @@ const main = async () => {
 
   const seen = new Set();
   const verified = [];
+  const signed = [];
 
   for (const [index, entry] of document.entries.entries()) {
     const label = `entries[${index}]`;
@@ -226,6 +289,83 @@ const main = async () => {
     }
 
     if (entry.status === 'verified') verified.push({ label, origin, challenge: entry.challenge });
+
+    // --- DID proof (optional, but all-or-nothing when declared) --------------
+    const hasKey = entry.didPublicKey !== undefined;
+    const hasSignature = entry.challengeSignature !== undefined;
+    const hasFingerprint = entry.didPublicKeyFingerprint !== undefined;
+    if (!hasKey && !hasSignature && !hasFingerprint) {
+      // Legacy declaration: accepted as before.
+    } else if (hasSignature && !hasKey) {
+      fail(`${label} ${origin} declares a challengeSignature`, 'a didPublicKey is required to verify it');
+    } else if (!hasSignature) {
+      fail(
+        `${label} ${origin} declares a ${hasKey ? 'didPublicKey' : 'didPublicKeyFingerprint'} without a challengeSignature`,
+        'a key without a proof cannot be verified'
+      );
+    } else if (hasFingerprint && !FINGERPRINT_PATTERN.test(String(entry.didPublicKeyFingerprint))) {
+      fail(`${label}.didPublicKeyFingerprint is 16 lowercase hex characters`, String(entry.didPublicKeyFingerprint));
+    } else {
+      const publicKey = decodePublicKey(String(entry.didPublicKey));
+      if (publicKey === null || publicKey.length !== DILITHIUM5_PUBLIC_KEY_BYTES) {
+        fail(
+          `${label}.didPublicKey decodes to ${DILITHIUM5_PUBLIC_KEY_BYTES} bytes`,
+          publicKey === null ? 'not base64' : `got ${publicKey.length} bytes`
+        );
+      } else if (hasFingerprint && String(entry.didPublicKeyFingerprint) !== fingerprintOf(publicKey)) {
+        fail(
+          `${label}.didPublicKeyFingerprint matches the key`,
+          `declared ${entry.didPublicKeyFingerprint}, key is ${fingerprintOf(publicKey)}`
+        );
+      } else {
+        const signature = decodeBase64(String(entry.challengeSignature).replace(/^dilithium5_/i, ''));
+        if (signature === null || signature.length !== DILITHIUM5_SIGNATURE_BYTES) {
+          fail(
+            `${label}.challengeSignature decodes to ${DILITHIUM5_SIGNATURE_BYTES} bytes`,
+            signature === null ? 'not base64' : `got ${signature.length} bytes`
+          );
+        } else if (!CHALLENGE_PATTERN.test(String(entry.challenge))) {
+          fail(`${label} ${origin} cannot be verified`, 'its challenge is malformed (see above)');
+        } else {
+          signed.push({
+            label,
+            origin,
+            publicKey,
+            signature,
+            message: `${CHALLENGE_MESSAGE_DOMAIN}\n${origin}\n${entry.challenge}`,
+          });
+        }
+      }
+    }
+  }
+
+  // --- DID proof verification ------------------------------------------------
+  if (signed.length > 0) {
+    const verifySignature = await loadVerifier();
+    for (const item of signed) {
+      if (verifySignature === null) {
+        skip(
+          `${item.label} ${item.origin} did proof`,
+          'no Dilithium-5 verifier in this dependency-free checkout — a maintainer must merge'
+        );
+        continue;
+      }
+      let ok = false;
+      try {
+        ok = verifySignature(item.publicKey, item.message, item.signature) === true;
+      } catch (error) {
+        fail(`${item.label} ${item.origin} did proof`, error instanceof Error ? error.message : String(error));
+        continue;
+      }
+      if (ok) pass(`${item.label} ${item.origin} did proof (aidid-rp-challenge-v1, origin-bound)`);
+      else {
+        fail(
+          `${item.label} ${item.origin} did proof`,
+          `the Dilithium-5 signature does not verify "${CHALLENGE_MESSAGE_DOMAIN}\\n<origin>\\n<challenge>" ` +
+            '(wrong key, tampered challenge/origin, or a replay)'
+        );
+      }
+    }
   }
 
   if (offline) {
