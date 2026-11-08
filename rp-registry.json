@@ -1,31 +1,47 @@
 {
-  "schema": "aidid.rp-registry",
-  "version": "1",
-  "source": "public-repo",
-  "updatedAt": "2026-10-12",
-  "notes": "Public AIDID integration registry (imAiDID/aidid-registry). An entry only proves that the origin serves the registered challenge at https://<origin>/.well-known/aidid-rp.txt — it is NOT a security or reputation endorsement. `did` is recommended now and required from on-chain phase 1. A pull request that changes only this file is auto-merged once every verified challenge is confirmed — pull requests opened from a fork included. Validate with: node scripts/validate-registry.mjs",
-  "entries": [
-    {
-      "origin": "https://aidid.im",
-      "name": "AIDID",
-      "homepage": "https://aidid.im",
-      "capabilities": ["login"],
-      "tier": "first-party",
-      "challenge": "aidid-rp-verify-1d9a73c8265a1da28a764a631d7f4d40",
-      "status": "verified",
-      "registeredAt": "2026-10-09",
-      "official": true
-    },
-    {
-      "origin": "https://aidid.pages.dev",
-      "name": "AIDID (Cloudflare Pages alternate origin)",
-      "homepage": "https://aidid.im",
-      "capabilities": ["login"],
-      "tier": "first-party",
-      "challenge": "aidid-rp-verify-1d9a73c8265a1da28a764a631d7f4d40",
-      "status": "verified",
-      "registeredAt": "2026-10-12",
-      "official": false
-    }
-  ]
+ "schema": "aidid.rp-registry",
+ "version": "1",
+ "source": "public-repo",
+ "updatedAt": "2026-11-08",
+ "notes": "Public AIDID integration registry (imAiDID/aidid-registry). An entry only proves that the origin serves the registered challenge at https://<origin>/.well-known/aidid-rp.txt — it is NOT a security or reputation endorsement. `did` is recommended now and required from on-chain phase 1. A pull request that changes only this file is auto-merged once every verified challenge is confirmed — pull requests opened from a fork included. Validate with: node scripts/validate-registry.mjs",
+ "entries": [
+  {
+   "origin": "https://aidid.im",
+   "name": "AIDID",
+   "homepage": "https://aidid.im",
+   "capabilities": [
+    "login"
+   ],
+   "tier": "first-party",
+   "challenge": "aidid-rp-verify-1d9a73c8265a1da28a764a631d7f4d40",
+   "status": "verified",
+   "registeredAt": "2026-10-09",
+   "official": true
+  },
+  {
+   "origin": "https://aidid.pages.dev",
+   "name": "AIDID (Cloudflare Pages alternate origin)",
+   "homepage": "https://aidid.im",
+   "capabilities": [
+    "login"
+   ],
+   "tier": "first-party",
+   "challenge": "aidid-rp-verify-1d9a73c8265a1da28a764a631d7f4d40",
+   "status": "verified",
+   "registeredAt": "2026-10-12",
+   "official": false
+  },
+  {
+   "origin": "https://aidid-im.pages.dev",
+   "name": "AIDID (Cloudflare Pages new origin) test",
+   "homepage": "https://aidid.im",
+   "capabilities": [
+    "login"
+   ],
+   "tier": "first-party",
+   "challenge": "aidid-rp-verify-1d9a73c8265a1da28a764a631d7f4d40",
+   "status": "verified",
+   "registeredAt": "2026-11-08"
+  }
+ ]
 }
